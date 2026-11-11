@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const AVATAR_MODEL = "cara-4";
+const AVATAR_MODEL = "cara-3";
 
 /**
  * Creates an Anam session token with ElevenLabs agent settings.
