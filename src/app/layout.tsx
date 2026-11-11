@@ -20,9 +20,9 @@ const berkeleyMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "ElevenLabs Agent + Anam Avatar",
+  title: "Cian",
   description:
-    "Expressive voice agent with real-time lip-synced avatar",
+    "Simulated Storytelling: Cian, a seanchaí-inspired storytelling robot",
 };
 
 export const viewport = {
