@@ -2,10 +2,17 @@
 
 This fork runs Cian as a full-screen kiosk: a black screen with the face only, projected onto the mask.
 
-- **Start:** say "hello", press the consent button (Makey Makey sends Space), or click the screen.
+- **Start:** speak into the mic (any speech above the `level` threshold, e.g. switching on the wireless mic and saying something), press the spacebar (or a Makey Makey button), or click the screen.
 - **End:** press the button or click again during a conversation. Cian also ends a session after 15 minutes.
 - **Environment variables (Vercel):** `ANAM_API_KEY`, `ELEVENLABS_API_KEY`, `PERSONA_1_NAME`, `PERSONA_1_AVATAR_ID`, `PERSONA_1_AGENT_ID`, `KIOSK_SECRET`. Do not set `ANAM_API_URL`. Cian's avatar uses the `cara-3` model; set `ANAM_AVATAR_MODEL` only if you switch to an avatar that supports a newer one.
-- **Address settings:** `?key=` (your KIOSK_SECRET, required), plus optional `zoom`, `x`, `y`, `flip=h|v|hv`, `fit=contain`, `max` (minutes) and `debug=1`. Example: `/?key=abc&zoom=1.2&y=-5&debug=1`.
+- **Address settings:** `?key=` (your KIOSK_SECRET, required), plus optional:
+  - `trigger=voice|hello|off` (default `voice`: any speech starts Cian; `hello` listens for the word; `off` is button/click only)
+  - `level` 0–100, how loud speech must be to start (default 50; lower is more sensitive). Open with `debug=1` to see the live mic level and pick a number between room noise and talking.
+  - `cooldown` seconds before listening again after a conversation (default 5)
+  - `zoom`, `x`, `y`, `flip=h|v|hv`, `fit=contain` to line the face up on the mask
+  - `max` minutes before a conversation ends itself (default 15), `debug=1` for a status line
+  - Example: `/?key=abc&level=45&zoom=1.2&y=-5&debug=1`
+- **Mic:** Cian listens on Windows' default input device, so set the wireless mic as the default in Sound settings.
 - **Kiosk launch (Chrome):** `--kiosk --app=<url> --use-fake-ui-for-media-stream --autoplay-policy=no-user-gesture-required`
 
 ---

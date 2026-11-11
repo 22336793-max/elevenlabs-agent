@@ -2,30 +2,41 @@
  * CianKiosk: the full-screen view projected onto Cian's mask.
  *
  * Black screen with no visible interface. A conversation starts when:
- *   - someone says "hello" (Chrome speech recognition, while idle)
- *   - the consent button is pressed (Makey Makey sends Space)
+ *   - the mic picks up someone speaking (e.g. switching on the wireless mic)
+ *   - the spacebar is pressed (or a Makey Makey button, which sends Space)
  *   - the screen is clicked (handy for testing with a mouse)
  * Space or a click during a conversation ends it.
  *
- * Optional settings in the address, e.g. /?key=abc&zoom=1.2&y=-5:
- *   key   the KIOSK_SECRET set in Vercel (required if one is set)
- *   zoom  scale the face up or down (default 1)
- *   x, y  nudge the face sideways / up-down, in % of the screen (default 0)
- *   flip  mirror the image for the 45° mirror: h, v or hv (default none)
- *   fit   cover (fill the screen, default) or contain (show whole frame)
- *   max   end a conversation after this many minutes (default 15)
- *   debug show a small status line in the corner (debug=1)
+ * Optional settings in the address, e.g. /?key=abc&level=40&debug=1:
+ *   key      the KIOSK_SECRET set in Vercel (required if one is set)
+ *   trigger  what starts Cian hands-free: voice (any speech, default),
+ *            hello (only the word "hello"), or off (button/click only)
+ *   level    how loud speech must be to start Cian, 0–100 (default 50).
+ *            Lower = more sensitive. Use debug=1 to see live levels.
+ *   cooldown seconds to wait after a conversation before listening again
+ *            (default 5)
+ *   zoom     scale the face up or down (default 1)
+ *   x, y     nudge the face sideways / up-down, in % of the screen (default 0)
+ *   flip     mirror the image for the 45° mirror: h, v or hv (default none)
+ *   fit      cover (fill the screen, default) or contain (show whole frame)
+ *   max      end a conversation after this many minutes (default 15)
+ *   debug    show a small status line with the mic level (debug=1)
  */
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnamEvent, createClient, type AnamClient } from "@anam-ai/js-sdk";
 import { useHelloTrigger } from "@/hooks/useHelloTrigger";
+import { useVoiceTrigger } from "@/hooks/useVoiceTrigger";
 
 type Status = "idle" | "connecting" | "connected" | "error";
+type Trigger = "voice" | "hello" | "off";
 
 type Settings = {
   key: string;
+  trigger: Trigger;
+  level: number;
+  cooldownSeconds: number;
   zoom: number;
   x: number;
   y: number;
@@ -37,6 +48,9 @@ type Settings = {
 
 const DEFAULTS: Settings = {
   key: "",
+  trigger: "voice",
+  level: 50,
+  cooldownSeconds: 5,
   zoom: 1,
   x: 0,
   y: 0,
@@ -53,12 +67,17 @@ export default function CianKiosk() {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<Settings>(DEFAULTS);
+  const [ready, setReady] = useState(false); // settings read from the address
+  const [cooling, setCooling] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
+  const [micProblem, setMicProblem] = useState<string | null>(null);
 
   const statusRef = useRef<Status>("idle");
   const clientRef = useRef<AnamClient | null>(null);
   const maxTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const lastPressRef = useRef(0);
   const settingsRef = useRef<Settings>(DEFAULTS);
+  const prevStatusRef = useRef<Status>("idle");
 
   const setBoth = (s: Status) => {
     statusRef.current = s;
@@ -72,8 +91,12 @@ export default function CianKiosk() {
       const v = parseFloat(p.get(name) ?? "");
       return Number.isFinite(v) ? v : fallback;
     };
+    const t = (p.get("trigger") ?? "").toLowerCase();
     const s: Settings = {
       key: p.get("key") ?? "",
+      trigger: t === "hello" || t === "off" ? t : "voice",
+      level: num("level", DEFAULTS.level),
+      cooldownSeconds: num("cooldown", DEFAULTS.cooldownSeconds),
       zoom: num("zoom", DEFAULTS.zoom),
       x: num("x", DEFAULTS.x),
       y: num("y", DEFAULTS.y),
@@ -84,6 +107,7 @@ export default function CianKiosk() {
     };
     settingsRef.current = s;
     setSettings(s);
+    setReady(true);
   }, []);
 
   const cleanUp = useCallback(() => {
@@ -144,7 +168,7 @@ export default function CianKiosk() {
     }
   }, [cleanUp, stop]);
 
-  // One press (button, Space or click): start when idle, end when talking.
+  // One press (spacebar, button or click): start when idle, end when talking.
   const press = useCallback(() => {
     const now = Date.now();
     if (now - lastPressRef.current < PRESS_LOCKOUT_MS) return;
@@ -159,7 +183,7 @@ export default function CianKiosk() {
     }
   }, [start, stop]);
 
-  // Makey Makey consent button sends Space.
+  // Spacebar (and a Makey Makey button, which sends Space).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat) return;
@@ -170,8 +194,28 @@ export default function CianKiosk() {
     return () => window.removeEventListener("keydown", onKey);
   }, [press]);
 
-  // Saying "hello" starts a conversation, only while idle.
-  useHelloTrigger(status === "idle", start);
+  // After a conversation ends, wait a moment before listening again, so
+  // someone still speaking into the mic doesn't start a new one straight away.
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (status !== "idle" || prev === "idle") return;
+    setCooling(true);
+    const t = setTimeout(
+      () => setCooling(false),
+      Math.max(0, settingsRef.current.cooldownSeconds) * 1000
+    );
+    return () => clearTimeout(t);
+  }, [status]);
+
+  // Hands-free start, only while idle.
+  const listening = ready && status === "idle" && !cooling;
+  useVoiceTrigger(listening && settings.trigger === "voice", start, {
+    threshold: settings.level,
+    onLevel: settings.debug ? setMicLevel : undefined,
+    onBlocked: setMicProblem,
+  });
+  useHelloTrigger(listening && settings.trigger === "hello", start);
 
   // After an error, quietly go back to listening.
   useEffect(() => {
@@ -215,6 +259,15 @@ export default function CianKiosk() {
   const flipX = settings.flip.includes("h") ? -1 : 1;
   const flipY = settings.flip.includes("v") ? -1 : 1;
 
+  let debugLine: string = status;
+  if (status === "idle") {
+    if (cooling) debugLine = "resting before listening again";
+    else if (settings.trigger === "voice")
+      debugLine = `listening · mic level ${micLevel} · starts at ${settings.level}`;
+    else if (settings.trigger === "hello") debugLine = "listening for hello";
+    else debugLine = "waiting for button or click";
+  }
+
   return (
     <main
       className="fixed inset-0 bg-black overflow-hidden select-none"
@@ -240,9 +293,10 @@ export default function CianKiosk() {
       )}
 
       {settings.debug && (
-        <p className="absolute top-4 left-4 text-xs text-white/50 font-mono">
-          {status === "idle" ? "listening for hello" : status}
-        </p>
+        <div className="absolute top-4 left-4 text-xs text-white/50 font-mono space-y-1">
+          <p>{debugLine}</p>
+          {micProblem && <p>mic: {micProblem}</p>}
+        </div>
       )}
     </main>
   );
